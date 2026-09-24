@@ -1,13 +1,176 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { getErrorMessage } from '@/lib/errors'
 import { Spinner } from '@/components/Spinner'
 
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim()
+const GIS_SRC = 'https://accounts.google.com/gsi/client'
+
+type Props = { onError: (message: string) => void }
+
 /**
- * Redirects to Google and back to /auth/callback, which handles the session
- * and a pending invite exactly like the magic-link flow.
+ * With VITE_GOOGLE_CLIENT_ID set, uses Google Identity Services on our own
+ * origin and hands the ID token to Supabase (signInWithIdToken), so Google's
+ * dialog shows this site instead of <project-ref>.supabase.co.
+ * Without it, falls back to the Supabase OAuth redirect.
  */
-export function GoogleSignInButton({ onError }: { onError: (message: string) => void }) {
+export function GoogleSignInButton({ onError }: Props) {
+  return GOOGLE_CLIENT_ID ? (
+    <GoogleIdentityButton clientId={GOOGLE_CLIENT_ID} onError={onError} />
+  ) : (
+    <GoogleRedirectButton onError={onError} />
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Google Identity Services (preferred)
+// ---------------------------------------------------------------------------
+
+type CredentialResponse = { credential: string }
+
+type GoogleIdentity = {
+  accounts: {
+    id: {
+      initialize: (config: {
+        client_id: string
+        callback: (response: CredentialResponse) => void
+        nonce?: string
+        ux_mode?: 'popup' | 'redirect'
+        use_fedcm_for_button?: boolean
+        auto_select?: boolean
+      }) => void
+      renderButton: (
+        parent: HTMLElement,
+        options: {
+          type?: 'standard' | 'icon'
+          theme?: 'outline' | 'filled_blue' | 'filled_black'
+          size?: 'large' | 'medium' | 'small'
+          text?: 'signin_with' | 'signup_with' | 'continue_with' | 'signin'
+          shape?: 'rectangular' | 'pill' | 'circle' | 'square'
+          logo_alignment?: 'left' | 'center'
+          width?: number
+          locale?: string
+        },
+      ) => void
+    }
+  }
+}
+
+declare global {
+  interface Window {
+    google?: GoogleIdentity
+  }
+}
+
+let gisPromise: Promise<GoogleIdentity> | null = null
+
+function loadGoogleIdentity(): Promise<GoogleIdentity> {
+  if (window.google?.accounts?.id) return Promise.resolve(window.google)
+  gisPromise ??= new Promise<GoogleIdentity>((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = GIS_SRC
+    script.async = true
+    script.addEventListener('load', () =>
+      window.google ? resolve(window.google) : reject(new Error('Google script failed')),
+    )
+    script.addEventListener('error', () => {
+      gisPromise = null
+      reject(new TypeError('Failed to fetch Google sign-in'))
+    })
+    document.head.appendChild(script)
+  })
+  return gisPromise
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+function GoogleIdentityButton({ clientId, onError }: { clientId: string; onError: (message: string) => void }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [state, setState] = useState<'loading' | 'ready' | 'signing-in' | 'failed'>('loading')
+  // Keep the latest callback without re-initialising Google on every render.
+  const onErrorRef = useRef(onError)
+  useEffect(() => {
+    onErrorRef.current = onError
+  })
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function setup() {
+      try {
+        const google = await loadGoogleIdentity()
+        // Google receives the hashed nonce, Supabase the raw one, and verifies they match.
+        const rawNonce = crypto.randomUUID()
+        const hashedNonce = await sha256Hex(rawNonce)
+        if (cancelled || !containerRef.current) return
+
+        google.accounts.id.initialize({
+          client_id: clientId,
+          nonce: hashedNonce,
+          ux_mode: 'popup',
+          use_fedcm_for_button: true,
+          callback: async ({ credential }) => {
+            setState('signing-in')
+            const { error } = await supabase.auth.signInWithIdToken({
+              provider: 'google',
+              token: credential,
+              nonce: rawNonce,
+            })
+            // On success onAuthStateChange sets the session and LoginPage redirects.
+            if (error) {
+              setState('ready')
+              onErrorRef.current(getErrorMessage(error, 'Google sign-in failed. Please try again.'))
+            }
+          },
+        })
+        google.accounts.id.renderButton(containerRef.current, {
+          type: 'standard',
+          theme: 'outline',
+          size: 'large',
+          text: 'continue_with',
+          shape: 'pill',
+          logo_alignment: 'center',
+          locale: 'en',
+          width: Math.min(400, Math.round(containerRef.current.clientWidth)),
+        })
+        setState('ready')
+      } catch (error) {
+        if (cancelled) return
+        setState('failed')
+        console.error('Google Identity Services failed to load', error)
+      }
+    }
+
+    void setup()
+    return () => {
+      cancelled = true
+    }
+  }, [clientId])
+
+  // Blocked script (ad-blockers, strict privacy settings): offer the redirect flow instead.
+  if (state === 'failed') return <GoogleRedirectButton onError={onError} />
+
+  return (
+    <div className="relative flex min-h-11 w-full items-center justify-center">
+      <div ref={containerRef} className={`flex w-full justify-center ${state === 'ready' ? '' : 'invisible'}`} />
+      {state !== 'ready' && (
+        <div className="absolute inset-0 flex items-center justify-center gap-2 font-bold text-ink-soft">
+          <Spinner className="size-5" />
+          {state === 'signing-in' && 'Signing in…'}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Supabase OAuth redirect (fallback)
+// ---------------------------------------------------------------------------
+
+function GoogleRedirectButton({ onError }: Props) {
   const [redirecting, setRedirecting] = useState(false)
 
   async function handleClick() {
