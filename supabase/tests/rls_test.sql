@@ -20,6 +20,19 @@ insert into auth.users (id, email) values
   (:bob, 'bob@example.com'),
   (:mallory, 'mallory@example.com');
 
+-- OAuth (Google) user: profile takes the provider's name and picture.
+insert into auth.users (id, email, raw_user_meta_data) values
+  ('dddddddd-0000-0000-0000-000000000004', 'gina@gmail.com',
+   '{"full_name": "Gina Google", "picture": "https://example.com/g.png"}');
+do $$ begin
+  assert (select display_name from public.profiles where id = 'dddddddd-0000-0000-0000-000000000004') = 'Gina Google',
+    'oauth profile uses full_name';
+  assert (select avatar_url from public.profiles where id = 'dddddddd-0000-0000-0000-000000000004') = 'https://example.com/g.png',
+    'oauth profile uses picture';
+  raise notice 'ok - oauth users get provider name and avatar';
+end $$;
+delete from auth.users where id = 'dddddddd-0000-0000-0000-000000000004';
+
 -- Helper: become a user (role + JWT claims), transaction-local.
 create function pg_temp.login(p_uid uuid) returns void language plpgsql as $$
 begin

@@ -28,7 +28,11 @@ export function AuthCallbackPage() {
       <div className="mb-4 text-6xl">🔗</div>
       <h1 className="text-2xl font-black">Couldn’t sign you in</h1>
       <p className="mt-2 max-w-xs text-ink-soft">
-        {error ?? 'The login link is invalid or has expired.'} Request a new one — it only takes a second.
+        {error ?? 'The login link is invalid or has expired.'}
+      </p>
+      <p className="mt-3 max-w-xs text-sm text-ink-soft">
+        Each link works once. If your mail app opened it first, you may be signed in there instead. Request a new
+        link and open it in Safari or Chrome (long-press the link → “Open in browser”).
       </p>
       <Link to="/login" replace className="btn btn-primary btn-lg mt-6">
         Back to login

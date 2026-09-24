@@ -29,6 +29,9 @@ export function getErrorMessage(error: unknown, fallback = 'Something went wrong
     return 'Please enter a valid email address.'
   }
   if (/signups not allowed/i.test(message)) return 'Sign-ups are disabled for this app.'
+  if (e.code === 'otp_expired' || /token has expired or is invalid|otp.*(expired|invalid)/i.test(message)) {
+    return 'This login link is invalid or has expired. Request a new one.'
+  }
 
   // Postgres / PostgREST
   switch (e.code) {
