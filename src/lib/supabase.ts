@@ -1,8 +1,27 @@
 import { createClient } from '@supabase/supabase-js'
 import type { Database } from '@/types/database'
 
-const url = import.meta.env.VITE_SUPABASE_URL
-const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+/**
+ * The client needs the bare project origin. The dashboard also shows the REST
+ * endpoint (`https://<ref>.supabase.co/rest/v1/`); pasting that would make every
+ * auth call 404 (`/rest/v1/auth/v1/otp`), so keep only the origin.
+ */
+function projectOrigin(raw: string | undefined): string | undefined {
+  if (!raw?.trim()) return undefined
+  try {
+    const parsed = new URL(raw.trim())
+    if (parsed.pathname !== '/') {
+      console.warn(`VITE_SUPABASE_URL should be just the project URL; ignoring path "${parsed.pathname}"`)
+    }
+    return parsed.origin
+  } catch {
+    console.error(`VITE_SUPABASE_URL is not a valid URL: "${raw}"`)
+    return undefined
+  }
+}
+
+const url = projectOrigin(import.meta.env.VITE_SUPABASE_URL)
+const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim()
 
 export const isSupabaseConfigured = Boolean(url && anonKey)
 
